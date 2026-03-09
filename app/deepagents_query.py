@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 import logging
 
@@ -86,25 +87,28 @@ def _load_agent_prompt() -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def generate_query_with_deep_agent(
-    config: AppConfig,
-    *,
-    prompt_context: str,
-    question: str,
-) -> str:
-    model = _build_oci_chat_model(config)
-    system_prompt = _load_agent_prompt()
+@lru_cache(maxsize=1)
+def _get_cached_agent(
+    endpoint: str,
+    compartment: str,
+    model_id: str,
+    profile: str,
+):
     skills_root = _project_root() / "skills"
-    composed_user_prompt = f"{prompt_context}\n\n{question}".strip()
+    system_prompt = _load_agent_prompt()
 
-    logger.info("DeepAgent system prompt loaded: %s chars", len(system_prompt))
-    logger.info("DeepAgent skills root: %s", skills_root)
-    logger.info("DeepAgent prompt_context:\n%s", prompt_context)
-    logger.info("DeepAgent question: %s", question)
-    logger.info("DeepAgent composed user prompt:\n%s", composed_user_prompt)
+    logger.info("Initializing cached DeepAgent instance")
 
     agent = create_deep_agent(
-        model=model,
+        model=ChatOpenAI(
+            model=model_id,
+            api_key=SecretStr("OCI"),
+            base_url=endpoint,
+            http_client=httpx.Client(
+                auth=OciUserPrincipalAuth(profile_name=profile),
+                headers={"CompartmentId": compartment},
+            ),
+        ),
         backend=FilesystemBackend(root_dir=_project_root(), virtual_mode=False),
         response_format=GeneratedQuery,
         system_prompt=system_prompt,
@@ -112,6 +116,39 @@ def generate_query_with_deep_agent(
         middleware=[log_tool_calls],
     )
     logger.info("DeepAgent created with shared skills directory")
+    return agent
+
+
+def generate_query_with_deep_agent(
+    config: AppConfig,
+    *,
+    prompt_context: str,
+    question: str,
+) -> str:
+    oci_config = config.oci
+    if not oci_config:
+        raise ValueError("OCI config missing.")
+    if not oci_config.endpoint:
+        raise ValueError("OCI endpoint missing.")
+    if not oci_config.compartment:
+        raise ValueError("OCI compartment missing.")
+    if not oci_config.model_id:
+        raise ValueError("OCI model_id missing.")
+
+    profile = oci_config.profile or "DEFAULT"
+    agent = _get_cached_agent(
+        oci_config.endpoint,
+        oci_config.compartment,
+        oci_config.model_id,
+        profile,
+    )
+
+    composed_user_prompt = f"{prompt_context}\n\n{question}".strip()
+
+    logger.info("DeepAgent using cached agent instance")
+    logger.info("DeepAgent prompt_context:\n%s", prompt_context)
+    logger.info("DeepAgent question: %s", question)
+    logger.info("DeepAgent composed user prompt:\n%s", composed_user_prompt)
 
     result = agent.invoke(
         {
