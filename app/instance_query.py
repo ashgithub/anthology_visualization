@@ -5,12 +5,16 @@ from pathlib import Path
 import json
 import re
 from typing import Any
+import logging
 
 import oracledb
 
 from .db_config import AppConfig, OracleConfig
-from .deepagents_query import generate_sql_with_deep_agent
+from .deepagents_query import generate_query_with_deep_agent
+from .models import QueryMode
 from .types_from_ddl import DdlGraphTypes, extract_property_graph_name
+
+logger = logging.getLogger("visualization")
 
 
 @dataclass
@@ -19,22 +23,6 @@ class QueryPlan:
     columns: list[str]
     rows: list[list[Any]]
     note: str | None = None
-
-
-SCHEMA_PROMPT = """
-You are an expert Oracle SQL generator for Oracle property graphs.
-
-Generate a single SQL statement only. Do not include markdown or commentary.
-
-STRICT ORACLE GRAPH RULES:
-- Use Oracle SQL GRAPH_TABLE syntax.
-- The graph query MUST be inside GRAPH_TABLE and MUST include a MATCH clause.
-- MATCH is a clause inside GRAPH_TABLE. Never write "FROM MATCH ...".
-- Do NOT use PGQL_QUERY().
-- Always include a COLUMNS(...) clause.
-
-The query will be executed directly in Oracle. Avoid unsafe operations.
-""".strip()
 
 
 def _extract_graph_name(config: AppConfig) -> str | None:
@@ -121,11 +109,12 @@ def _build_rich_summary(graph: DdlGraphTypes, selected_types: list[str], max_pro
     return "\n".join(lines)
 
 
-def _build_generation_prompt(
+def _build_prompt_context(
     config: AppConfig,
     graph: DdlGraphTypes,
     scope: str,
     selected_types: list[str],
+    query_mode: QueryMode,
 ) -> str:
     graph_name = _extract_graph_name(config)
 
@@ -134,26 +123,13 @@ def _build_generation_prompt(
     else:
         schema_summary = _build_schema_summary(graph)
 
-    graph_hint = f"Active property graph name: {graph_name}" if graph_name else "Active property graph name: (unknown)"
-    graph_table_examples = "\n".join(
-        [
-            "Examples (follow this exact style):",
-            "SELECT COUNT(*) AS vertex_count",
-            "FROM GRAPH_TABLE(",
-            f"  {graph_name or '<graph_name>'}",
-            "  MATCH (v)",
-            "  COLUMNS (1 AS dummy)",
-            ");",
-            "",
-            "SELECT COUNT(*) AS customer_count",
-            "FROM GRAPH_TABLE(",
-            f"  {graph_name or '<graph_name>'}",
-            "  MATCH (c IS customer)",
-            "  COLUMNS (1 AS dummy)",
-            ");",
-        ]
+    mode_hint = (
+        "Use your pgql-query skill to generate an Oracle Property Graph Query Language query."
+        if query_mode == "pgql"
+        else "Use your sql-query skill to generate a traditional relational Oracle SQL query."
     )
-    return f"{SCHEMA_PROMPT}\n\n{graph_hint}\n\n{schema_summary}\n\n{graph_table_examples}"
+    graph_hint = f"Active property graph name: {graph_name}" if graph_name else "Active property graph name: (unknown)"
+    return "\n".join([mode_hint, graph_hint, schema_summary])
 
 
 def _connect_db(oracle: OracleConfig) -> oracledb.Connection:
@@ -174,14 +150,12 @@ def _execute_query(conn: oracledb.Connection, sql: str):
 
 
 _BAD_SQL_HINTS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bPGQL_QUERY\b", re.IGNORECASE), "Do not use PGQL_QUERY(); use GRAPH_TABLE(<graph> MATCH ... COLUMNS ...)") ,
+    (re.compile(r"\bPGQL_QUERY\b", re.IGNORECASE), "Do not use PGQL_QUERY(); use GRAPH_TABLE(<graph> MATCH ... COLUMNS ...)"),
     (re.compile(r"\bFROM\s+MATCH\b", re.IGNORECASE), "MATCH must be a clause inside GRAPH_TABLE; do not write 'FROM MATCH ...'."),
 ]
 
 
 def _validate_generated_sql(sql: str) -> str | None:
-    """Return an error message if the SQL looks invalid for our supported graph style."""
-
     for pattern, msg in _BAD_SQL_HINTS:
         if pattern.search(sql):
             return msg
@@ -213,14 +187,35 @@ def run_instance_query(
     *,
     execute: bool = False,
     provided_sql: str | None = None,
+    query_mode: QueryMode = "sql",
 ) -> QueryPlan:
+    logger.info(
+        "Instance query start: mode=%s execute=%s scope=%s selected_types=%s text=%s",
+        query_mode,
+        execute,
+        scope,
+        selected_types,
+        text,
+    )
     if provided_sql:
-        generated_sql = provided_sql
+        logger.info("Instance query using provided query override")
+        generated_query = provided_sql
     else:
-        generated_sql = generate_sql_with_deep_agent(
+        generated_query = generate_query_with_deep_agent(
             config,
-            system_prompt=_build_generation_prompt(config, graph, scope, selected_types),
+            prompt_context=_build_prompt_context(config, graph, scope, selected_types, query_mode),
             question=text,
+        )
+
+    logger.info("Instance query generated raw output:\n%s", generated_query)
+
+    if query_mode == "pgql":
+        logger.info("Returning PGQL generate-only result")
+        return QueryPlan(
+            query=generated_query.strip(),
+            columns=[],
+            rows=[],
+            note="PGQL generated only; execution is not enabled for PGQL mode yet",
         )
 
     extra_filters = ""
@@ -228,7 +223,7 @@ def run_instance_query(
         joined = ", ".join(f"'{t}'" for t in selected_types[:25])
         extra_filters = f"vertex_type IN ({joined})"
 
-    sql = generated_sql.strip()
+    sql = generated_query.strip()
     if sql.startswith("```"):
         sql = re.sub(r"^```[a-zA-Z0-9_]*\n?", "", sql)
         sql = re.sub(r"\n?```$", "", sql)
@@ -236,6 +231,7 @@ def run_instance_query(
 
     sql = sql.rstrip("; ")
 
+    logger.info("SQL after fence stripping / trim:\n%s", sql)
     validation_error = _validate_generated_sql(sql)
     if validation_error:
         return QueryPlan(
@@ -253,8 +249,10 @@ def run_instance_query(
         sql += f" FETCH FIRST {limit} ROWS ONLY"
 
     if not execute:
+        logger.info("Returning SQL generate-only result")
         return QueryPlan(query=sql, columns=[], rows=[], note="Query generated only")
 
+    logger.info("Executing SQL against Oracle")
     conn = _connect_db(oracle)
     try:
         cols, rows = _execute_query(conn, sql)

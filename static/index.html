@@ -79,23 +79,38 @@
 
       <main class="main">
         <div class="mainTabs">
-          <button id="tabSchema" class="mainTab active" type="button">Schema</button>
-          <button id="tabInstance" class="mainTab" type="button">Instance Query</button>
+          <button id="tabSchema" class="mainTab" type="button">Schema</button>
+          <button id="tabInstance" class="mainTab active" type="button">Instance Query</button>
         </div>
-        <div id="schemaPanel" class="mainPanel">
+        <div id="schemaPanel" class="mainPanel hidden">
           <div id="cy" class="cy"></div>
         </div>
-        <div id="instancePanel" class="mainPanel hidden">
+        <div id="instancePanel" class="mainPanel">
           <div class="instanceWrap">
             <div class="instanceHeader">
               <div>
                 <div class="instanceTitle">Instance Query</div>
                 <div class="instanceSub">Describe what you want and preview the generated PGQL/SQL.</div>
               </div>
-              <label class="controlInline">
-                <input id="instanceScope" type="checkbox" checked />
-                <span>Limit to selected types</span>
-              </label>
+              <div class="instanceHeaderControls">
+                <label class="controlInline">
+                  <input id="instanceScope" type="checkbox" checked />
+                  <span>Limit to selected types</span>
+                </label>
+                <div class="control">
+                  <span>Query mode</span>
+                  <div class="queryModeToggle" id="instanceQueryMode" role="radiogroup" aria-label="Query mode">
+                    <label class="queryModeOption">
+                      <input type="radio" name="instanceQueryMode" value="sql" />
+                      <span>SQL</span>
+                    </label>
+                    <label class="queryModeOption">
+                      <input type="radio" name="instanceQueryMode" value="pgql" checked />
+                      <span>PGQL</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <form id="instanceForm" class="instanceForm">

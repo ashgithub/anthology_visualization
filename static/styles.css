@@ -740,3 +740,52 @@ details.section > summary.sectionTitle {
 .panelToggleIcon {
   font-size: 16px;
 }
+
+
+.instanceHeaderControls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.instanceHeaderControls .control {
+  min-width: 140px;
+}
+
+
+.queryModeToggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0b1427;
+}
+
+.queryModeOption {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.queryModeOption input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.queryModeOption span {
+  padding: 10px 14px;
+  cursor: pointer;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+
+.queryModeOption:last-child span {
+  border-right: none;
+}
+
+.queryModeOption input:checked + span {
+  background: rgba(122, 162, 255, 0.18);
+  color: var(--text);
+}

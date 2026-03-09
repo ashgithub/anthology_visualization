@@ -50,6 +50,7 @@ class NeighborhoodResponse(BaseModel):
 
 
 Direction = Literal["in", "out", "both"]
+QueryMode = Literal["sql", "pgql"]
 
 
 class InstanceQueryRequest(BaseModel):
@@ -59,6 +60,7 @@ class InstanceQueryRequest(BaseModel):
     limit: int | None = None
     execute: bool = False
     sql: str | None = None
+    query_mode: QueryMode = "sql"
 
 
 class InstanceQueryResponse(BaseModel):

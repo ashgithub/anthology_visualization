@@ -1,0 +1,217 @@
+-- Graph Demo Dataset (Deerfield Mini Grid)
+-- Apply with SQLcl / SQL*Plus connected to Oracle 26ai schema
+
+
+
+PROMPT Creating tables...
+CREATE TABLE substations (
+    id NUMBER PRIMARY KEY,
+    name VARCHAR2(100) NOT NULL,
+    code VARCHAR2(20) UNIQUE,
+    latitude NUMBER(10,7) NOT NULL,
+    longitude NUMBER(10,7) NOT NULL,
+    street_address VARCHAR2(200),
+    city VARCHAR2(50),
+    state CHAR(2),
+    zip VARCHAR2(10),
+    capacity_mva NUMBER(6,2),
+    commissioned_on DATE,
+    status VARCHAR2(20),
+    operator_contact VARCHAR2(80)
+);
+
+CREATE TABLE circuits (
+    id NUMBER PRIMARY KEY,
+    circuit_name VARCHAR2(100) NOT NULL,
+    circuit_code VARCHAR2(20) UNIQUE,
+    substation_id NUMBER NOT NULL REFERENCES substations(id),
+    voltage_kv NUMBER(5,2),
+    length_miles NUMBER(6,2),
+    customers_served NUMBER(6),
+    avg_load_mw NUMBER(6,2),
+    peak_load_mw NUMBER(6,2),
+    load_factor_pct NUMBER(5,2),
+    neighborhood VARCHAR2(100),
+    primary_feeder VARCHAR2(30),
+    last_inspection_date DATE,
+    next_inspection_due DATE,
+    reliability_grade VARCHAR2(10)
+);
+
+CREATE TABLE assets (
+    id NUMBER PRIMARY KEY,
+    asset_id VARCHAR2(30) UNIQUE,
+    asset_type VARCHAR2(30) NOT NULL,
+    circuit_id NUMBER REFERENCES circuits(id),
+    substation_id NUMBER REFERENCES substations(id),
+    latitude NUMBER(10,7) NOT NULL,
+    longitude NUMBER(10,7) NOT NULL,
+    street_address VARCHAR2(200),
+    installation_date DATE,
+    condition_score NUMBER(3,1),
+    health_index NUMBER(3,1),
+    last_maintenance_date DATE,
+    next_maintenance_due DATE,
+    manufacturer VARCHAR2(80),
+    model VARCHAR2(80),
+    status VARCHAR2(20),
+    criticality VARCHAR2(10),
+    phase VARCHAR2(4),
+    rated_mva NUMBER(5,2)
+);
+
+CREATE TABLE customers (
+    id NUMBER PRIMARY KEY,
+    account_number VARCHAR2(30) UNIQUE,
+    name VARCHAR2(120),
+    customer_type VARCHAR2(30),
+    circuit_id NUMBER REFERENCES circuits(id),
+    latitude NUMBER(10,7) NOT NULL,
+    longitude NUMBER(10,7) NOT NULL,
+    service_address VARCHAR2(200),
+    city VARCHAR2(50),
+    state CHAR(2),
+    zip VARCHAR2(10),
+    contact_phone VARCHAR2(20),
+    contact_email VARCHAR2(80),
+    avg_monthly_usage_kwh NUMBER(9,2),
+    peak_demand_kw NUMBER(6,2),
+    critical_facility_type VARCHAR2(80),
+    sla_priority VARCHAR2(20)
+);
+
+CREATE TABLE outages (
+    id NUMBER PRIMARY KEY,
+    incident_code VARCHAR2(20) UNIQUE,
+    circuit_id NUMBER NOT NULL REFERENCES circuits(id),
+    root_cause_asset_id NUMBER REFERENCES assets(id),
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP,
+    cause_category VARCHAR2(40),
+    weather_condition VARCHAR2(40),
+    customers_affected NUMBER(6),
+    duration_minutes NUMBER(6),
+    saidi_minutes NUMBER(6),
+    safi_count NUMBER(6),
+    crew_dispatched CHAR(1) CHECK (crew_dispatched IN ('Y','N')),
+    crew_id VARCHAR2(20),
+    description VARCHAR2(500),
+    restoration_notes VARCHAR2(500)
+);
+
+CREATE TABLE work_orders (
+    id NUMBER PRIMARY KEY,
+    outage_id NUMBER REFERENCES outages(id),
+    asset_id NUMBER REFERENCES assets(id),
+    crew_id VARCHAR2(20),
+    created_time TIMESTAMP,
+    completed_time TIMESTAMP,
+    work_type VARCHAR2(40),
+    priority VARCHAR2(20),
+    status VARCHAR2(20),
+    labor_hours NUMBER(5,2),
+    material_cost NUMBER(10,2),
+    notes VARCHAR2(500)
+);
+
+CREATE TABLE documents (
+    id NUMBER PRIMARY KEY,
+    document_type VARCHAR2(40),
+    title VARCHAR2(200),
+    related_outage_id NUMBER REFERENCES outages(id),
+    related_asset_id NUMBER REFERENCES assets(id),
+    related_circuit_id NUMBER REFERENCES circuits(id),
+    content CLOB,
+    tags VARCHAR2(200),
+    source VARCHAR2(100),
+    author VARCHAR2(80),
+    document_date DATE,
+    embedding VECTOR(1536, FLOAT32)
+);
+
+CREATE TABLE crew_assignments (
+    crew_id VARCHAR2(20),
+    outage_id NUMBER REFERENCES outages(id),
+    dispatch_time TIMESTAMP,
+    arrival_time TIMESTAMP,
+    PRIMARY KEY (crew_id, outage_id)
+);
+
+CREATE TABLE customer_complaints (
+    id NUMBER PRIMARY KEY,
+    customer_id NUMBER REFERENCES customers(id),
+    outage_id NUMBER REFERENCES outages(id),
+    category VARCHAR2(40),
+    status VARCHAR2(20),
+    complaint_time TIMESTAMP,
+    resolution VARCHAR2(400)
+);
+
+CREATE TABLE asset_health_history (
+    asset_id NUMBER REFERENCES assets(id),
+    reading_time TIMESTAMP,
+    condition_score NUMBER(3,1),
+    temperature_c NUMBER(5,2),
+    load_pct NUMBER(5,2),
+    PRIMARY KEY (asset_id, reading_time)
+);
+
+PROMPT Inserting substations...
+INSERT INTO substations VALUES (1,'North Substation','SUB-NORTH',42.1691,-87.8432,'50 Waukegan Rd','Deerfield','IL','60015',120,DATE '2002-06-01','active','ops-north@utility.com');
+INSERT INTO substations VALUES (2,'Lake Cook Substation','SUB-LAKE',42.1552,-87.8275,'10 Lake Cook Rd','Deerfield','IL','60015',95,DATE '2005-09-15','active','ops-lake@utility.com');
+
+PROMPT Inserting circuits...
+INSERT INTO circuits VALUES (10,'Circuit 3','CIR-3',1,13.2,11.4,900,8.5,11.2,75.9,'Deerfield North','Feeder-A',DATE '2024-03-01',DATE '2024-09-01','A');
+INSERT INTO circuits VALUES (11,'Circuit 5','CIR-5',1,13.2,9.8,1100,9.2,12.0,76.7,'Central Corridor','Feeder-A',DATE '2023-11-15',DATE '2024-05-15','B');
+INSERT INTO circuits VALUES (12,'Circuit 7','CIR-7',1,13.2,10.1,1250,10.8,13.6,79.4,'Oak Street Corridor','Feeder-B',DATE '2024-04-20',DATE '2024-10-20','C');
+INSERT INTO circuits VALUES (13,'Circuit 9','CIR-9',1,13.2,8.6,850,7.4,10.2,72.5,'Waukegan Road','Feeder-B',DATE '2023-09-05',DATE '2024-03-05','B');
+INSERT INTO circuits VALUES (14,'Circuit 12','CIR-12',2,13.2,9.9,980,9.9,14.0,84.1,'Lake Cook Commerce','Feeder-C',DATE '2024-01-30',DATE '2024-07-30','C');
+INSERT INTO circuits VALUES (15,'Circuit 14','CIR-14',2,13.2,7.2,700,6.1,8.5,71.8,'Deerfield South','Feeder-C',DATE '2023-07-18',DATE '2024-01-18','B');
+
+PROMPT Inserting representative assets...
+INSERT INTO assets VALUES (100,'T-2847','transformer',12,1,42.1645,-87.8451,'125 Oak St',DATE '2014-06-01',3.5,3.8,DATE '2024-02-10',DATE '2024-08-10','ABB','TX200','in_service','high','3PH',12.5);
+INSERT INTO assets VALUES (101,'T-2891','transformer',12,1,42.1680,-87.8480,'600 Maple St',DATE '2016-03-15',4.2,4.5,DATE '2023-10-22',DATE '2024-04-22','ABB','TX210','in_service','medium','3PH',12.5);
+INSERT INTO assets VALUES (102,'R-3301','recloser',11,1,42.1712,-87.8395,'50 Central Ave',DATE '2005-09-09',4.8,5.0,DATE '2022-12-01',DATE '2024-01-01','Siemens','RC-9','in_service','medium','A',2.5);
+INSERT INTO assets VALUES (105,'T-1203','transformer',14,2,42.1588,-87.8205,'230 Commerce Dr',DATE '2018-11-11',4.0,4.2,DATE '2023-08-30',DATE '2024-02-28','ABB','TX180','in_service','high','3PH',10.0);
+INSERT INTO assets VALUES (106,'T-1205','transformer',14,2,42.1575,-87.8220,'240 Commerce Dr',DATE '2018-11-11',3.8,4.0,DATE '2023-07-05',DATE '2024-01-05','ABB','TX180','in_service','high','3PH',10.0);
+INSERT INTO assets VALUES (107,'T-1209','transformer',14,2,42.1595,-87.8180,'210 Commerce Dr',DATE '2019-02-10',3.9,4.1,DATE '2023-06-18',DATE '2023-12-18','ABB','TX200','in_service','high','3PH',10.0);
+-- Additional assets generated via seeder to reach ~30
+
+PROMPT Inserting sample customers...
+INSERT INTO customers VALUES (2000,'ACCT-1001','Valley Medical Clinic','critical',12,42.1660,-87.8460,'125 Oak St','Deerfield','IL','60015','847-555-0100','ops@valleymed.org',24500,520,'medical','P1');
+INSERT INTO customers VALUES (2001,'ACCT-1002','Water Pump Station 4','critical',12,42.1652,-87.8425,'200 Pump Rd','Deerfield','IL','60015','847-555-0101','plant@waterworks.com',18000,450,'water','P1');
+INSERT INTO customers VALUES (2002,'ACCT-2001','Deerfield Bakery','commercial',11,42.1701,-87.8350,'45 Central Ave','Deerfield','IL','60015','847-555-0201','owner@deerbake.com',4200,95,NULL,'P2');
+INSERT INTO customers VALUES (2003,'ACCT-2002','Lake Cook Offices','commercial',10,42.1732,-87.8341,'300 Lake Cook Rd','Deerfield','IL','60015','847-555-0202','pm@lakecookoffices.com',8700,180,NULL,'P2');
+INSERT INTO customers VALUES (2004,'ACCT-3001','Greenview HOA','residential',14,42.1602,-87.8190,'600 Greenview Ln','Deerfield','IL','60015','847-555-0301','hoa@greenview.com',1200,35,NULL,'P3');
+INSERT INTO customers VALUES (2005,'ACCT-3002','Deer Run Residences','residential',15,42.1533,-87.8262,'220 Deer Run Ct','Deerfield','IL','60015','847-555-0302','manager@deerrun.com',980,30,NULL,'P3');
+-- Seeder script will add remaining customers (≈600)
+
+PROMPT Inserting outages...
+INSERT INTO outages VALUES (
+    3000,'INC-1456',12,100,
+    TO_TIMESTAMP('2025-01-12 14:15:00','YYYY-MM-DD HH24:MI:SS'),
+    TO_TIMESTAMP('2025-01-12 16:45:00','YYYY-MM-DD HH24:MI:SS'),
+    'vegetation','snow',847,150,150,1,'Y','CREW-N1',
+    'Oak Street transformer failure - squirrel intrusion and overgrown canopy',
+    'Installed guards, scheduled vegetation patrol'
+);
+-- Additional outages per scenario inserted via seed script
+
+PROMPT Inserting work orders...
+INSERT INTO work_orders VALUES (
+    4000,3000,100,'CREW-N1',SYSTIMESTAMP,SYSTIMESTAMP,
+    'emergency_repair','high','completed',6.5,3200,
+    'Installed animal guards and trimmed canopy'
+);
+
+PROMPT Inserting documents...
+INSERT INTO documents (id,document_type,title,related_outage_id,related_asset_id,related_circuit_id,content,tags,source,author,document_date,embedding)
+VALUES (
+    5000,'field_note','Crew log: Oak Street failure',3000,100,12,
+    'Observed squirrel nest in transformer housing; recommended expedited vegetation patrol.',
+    'vegetation,squirrel',
+    'field_ops','Crew Lead A',DATE '2025-01-12',
+    NULL
+);
+
+COMMIT;

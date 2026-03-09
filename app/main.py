@@ -36,6 +36,21 @@ MAX_INSTANCE_LIMIT = 200
 CONFIG_PATH = (APP_DIR.parent / "config" / "db.yaml").resolve()
 
 
+def _configure_logging() -> None:
+    logger = logging.getLogger("visualization")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    has_stream_handler = any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
+    if not has_stream_handler:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        logger.addHandler(handler)
+
+
+
+
 def _load_app_config():
     try:
         return load_config(CONFIG_PATH)
@@ -73,6 +88,8 @@ def _load_graph_types():
         friendly_names=profile.friendly_names,
     )
 
+
+_configure_logging()
 
 app = FastAPI(title="EW Graph Visualization")
 
@@ -384,7 +401,8 @@ def instance_query(payload: InstanceQueryRequest):
     selected = [s for s in payload.selected_types if s]
     scope = payload.scope
     logger.info(
-        "Instance query submitted (execute=%s, scope=%s, selected=%s)",
+        "Instance query submitted (mode=%s, execute=%s, scope=%s, selected=%s)",
+        payload.query_mode,
         payload.execute,
         scope,
         len(selected),
@@ -401,6 +419,7 @@ def instance_query(payload: InstanceQueryRequest):
             limit,
             execute=payload.execute,
             provided_sql=payload.sql,
+            query_mode=payload.query_mode,
         )
     except Exception:
         logger.exception("Instance query failed")

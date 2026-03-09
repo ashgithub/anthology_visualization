@@ -41,6 +41,7 @@ const ui = {
   instanceForm: document.getElementById('instanceForm'),
   instanceInput: document.getElementById('instanceInput'),
   instanceScope: document.getElementById('instanceScope'),
+  instanceQueryMode: document.querySelector('input[name="instanceQueryMode"]:checked'),
   instanceQuery: document.getElementById('instanceQuery'),
   instanceResults: document.getElementById('instanceResults'),
   instanceMeta: document.getElementById('instanceMeta'),
@@ -403,7 +404,22 @@ function currentScopePayload() {
   const text = ui.instanceInput.value.trim();
   const selectedTypes = ui.instanceScope.checked ? getSelectedTypeIds() : [];
   const scope = ui.instanceScope.checked ? 'selected' : 'all';
-  return { text, selectedTypes, scope };
+  const queryMode = getQueryMode();
+  return { text, selectedTypes, scope, queryMode };
+}
+
+
+function getQueryMode() {
+  const checked = document.querySelector('input[name="instanceQueryMode"]:checked');
+  if (!checked) {
+    throw new Error('Missing query mode selector');
+  }
+  const value = checked.value;
+  console.log("instanceQueryMode checked", value);
+  if (value !== 'sql' && value !== 'pgql') {
+    throw new Error(`Invalid query mode: ${value}`);
+  }
+  return value;
 }
 
 function showEdgeDetails(edge) {
@@ -826,7 +842,7 @@ ui.searchForm.addEventListener('submit', (e) => {
 });
 
 function generateInstanceQuery() {
-  const { text, selectedTypes, scope } = currentScopePayload();
+  const { text, selectedTypes, scope, queryMode } = currentScopePayload();
   if (!text) {
     ui.instanceMeta.textContent = 'Enter a prompt to generate a query.';
     return;
@@ -835,12 +851,15 @@ function generateInstanceQuery() {
   ui.instanceQuery.classList.remove('error');
   ui.instanceQuery.value = 'Generating query…';
   ui.instanceResults.textContent = 'No results yet.';
-  apiPost('/api/instance-query', {
+  const payload = {
     text,
     scope,
     selected_types: selectedTypes,
     execute: false,
-  })
+    query_mode: queryMode,
+  };
+  console.log('instance query payload', payload);
+  apiPost('/api/instance-query', payload)
     .then(renderInstanceResults)
     .catch((err) => {
       ui.instanceMeta.textContent = '';
@@ -856,7 +875,7 @@ ui.instanceForm?.addEventListener('submit', (e) => {
 });
 
 ui.instanceRun?.addEventListener('click', () => {
-  const { text, selectedTypes, scope } = currentScopePayload();
+  const { text, selectedTypes, scope, queryMode } = currentScopePayload();
   const sql = ui.instanceQuery.value.trim();
   if (!sql || sql.startsWith('Waiting for') || sql.startsWith('No query')) {
     ui.instanceMeta.textContent = 'Generate a query first.';
@@ -866,13 +885,16 @@ ui.instanceRun?.addEventListener('click', () => {
   ui.instanceQuery.classList.remove('error');
   ui.instanceResults.classList.remove('error');
   ui.instanceResults.textContent = 'Running query…';
-  apiPost('/api/instance-query', {
+  const payload = {
     text,
     scope,
     selected_types: selectedTypes,
     execute: true,
     sql,
-  })
+    query_mode: queryMode,
+  };
+  console.log('instance query payload', payload);
+  apiPost('/api/instance-query', payload)
     .then(renderInstanceResults)
     .catch((err) => {
       ui.instanceMeta.textContent = '';
@@ -1394,6 +1416,7 @@ ui.viewAllBtn?.addEventListener('click', () => {
 });
 
 initActiveGraphLabel();
+setMainTab('instance');
 setStatus('Tip: search for a type');
 initStartupGraph();
 renderRecent();
