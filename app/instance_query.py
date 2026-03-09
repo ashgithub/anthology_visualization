@@ -1,26 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-import re
-
-import oracledb
-import oci
-from oci.generative_ai_inference import GenerativeAiInferenceClient
-from oci.generative_ai_inference.models import (
-    BaseChatRequest,
-    ChatDetails,
-    GenericChatRequest,
-    OnDemandServingMode,
-    SystemMessage,
-    TextContent,
-    UserMessage,
-)
-
-from .db_config import AppConfig, OracleConfig
 from pathlib import Path
 import json
+import re
+from typing import Any
 
+import oracledb
+
+from .db_config import AppConfig, OracleConfig
+from .deepagents_query import generate_sql_with_deep_agent
 from .types_from_ddl import DdlGraphTypes, extract_property_graph_name
 
 
@@ -132,17 +121,12 @@ def _build_rich_summary(graph: DdlGraphTypes, selected_types: list[str], max_pro
     return "\n".join(lines)
 
 
-def _build_chat_details(
+def _build_generation_prompt(
     config: AppConfig,
     graph: DdlGraphTypes,
-    question: str,
     scope: str,
     selected_types: list[str],
-) -> ChatDetails:
-    oci_config = config.oci
-    if not oci_config:
-        raise ValueError("OCI config missing.")
-
+) -> str:
     graph_name = _extract_graph_name(config)
 
     if scope == "selected" and selected_types:
@@ -169,41 +153,7 @@ def _build_chat_details(
             ");",
         ]
     )
-    sys_msg = SystemMessage(
-        content=[
-            TextContent(
-                text=f"{SCHEMA_PROMPT}\n\n{graph_hint}\n\n{schema_summary}\n\n{graph_table_examples}"
-            )
-        ]
-    )
-    user_msg = UserMessage(content=[TextContent(text=question)])
-
-    chat_req = GenericChatRequest(
-        messages=[sys_msg, user_msg],
-        api_format=BaseChatRequest.API_FORMAT_GENERIC,
-        temperature=0.2,
-        is_stream=False,
-    )
-
-    return ChatDetails(
-        serving_mode=OnDemandServingMode(model_id=oci_config.model_id),
-        compartment_id=oci_config.compartment,
-        chat_request=chat_req,
-    )
-
-
-def _create_oci_client(config: AppConfig) -> GenerativeAiInferenceClient:
-    oci_config = config.oci
-    if not oci_config:
-        raise ValueError("OCI config missing.")
-    oci_profile = oci_config.profile or "DEFAULT"
-    oci_cfg = oci.config.from_file(oci_config.config_file, oci_profile)
-    return GenerativeAiInferenceClient(
-        config=oci_cfg,
-        service_endpoint=oci_config.endpoint,
-        retry_strategy=oci.retry.NoneRetryStrategy(),
-        timeout=(10, 240),
-    )
+    return f"{SCHEMA_PROMPT}\n\n{graph_hint}\n\n{schema_summary}\n\n{graph_table_examples}"
 
 
 def _connect_db(oracle: OracleConfig) -> oracledb.Connection:
@@ -224,7 +174,7 @@ def _execute_query(conn: oracledb.Connection, sql: str):
 
 
 _BAD_SQL_HINTS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\bPGQL_QUERY\b", re.IGNORECASE), "Do not use PGQL_QUERY(); use GRAPH_TABLE(<graph> MATCH ... COLUMNS ...)"),
+    (re.compile(r"\bPGQL_QUERY\b", re.IGNORECASE), "Do not use PGQL_QUERY(); use GRAPH_TABLE(<graph> MATCH ... COLUMNS ...)") ,
     (re.compile(r"\bFROM\s+MATCH\b", re.IGNORECASE), "MATCH must be a clause inside GRAPH_TABLE; do not write 'FROM MATCH ...'."),
 ]
 
@@ -235,7 +185,6 @@ def _validate_generated_sql(sql: str) -> str | None:
     for pattern, msg in _BAD_SQL_HINTS:
         if pattern.search(sql):
             return msg
-    # If it looks like a graph query, require GRAPH_TABLE + MATCH + COLUMNS.
     lowered = sql.lower()
     mentions_graph = any(tok in lowered for tok in ["graph_table", "property graph", "match", "pgql"])
     if mentions_graph:
@@ -268,11 +217,10 @@ def run_instance_query(
     if provided_sql:
         generated_sql = provided_sql
     else:
-        client = _create_oci_client(config)
-        details = _build_chat_details(config, graph, text, scope, selected_types)
-        response = client.chat(details)
-        generated_sql = (
-            response.data.chat_response.choices[0].message.content[0].text.strip()
+        generated_sql = generate_sql_with_deep_agent(
+            config,
+            system_prompt=_build_generation_prompt(config, graph, scope, selected_types),
+            question=text,
         )
 
     extra_filters = ""
@@ -281,7 +229,6 @@ def run_instance_query(
         extra_filters = f"vertex_type IN ({joined})"
 
     sql = generated_sql.strip()
-    # Strip code fences if the model returns them.
     if sql.startswith("```"):
         sql = re.sub(r"^```[a-zA-Z0-9_]*\n?", "", sql)
         sql = re.sub(r"\n?```$", "", sql)
