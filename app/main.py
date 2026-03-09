@@ -446,9 +446,9 @@ def instance_query(payload: InstanceQueryRequest):
         )
 
     scope_note = (
-        f"-- Scope: selected types ({', '.join(selected)})"
+        f"Scope: selected types ({', '.join(selected)})"
         if scope == "selected" and selected
-        else "-- Scope: full graph"
+        else "Scope: full graph"
     )
     logger.info(
         "Instance query results returned (execute=%s, rows=%s)",
@@ -456,13 +456,17 @@ def instance_query(payload: InstanceQueryRequest):
         len(plan.rows),
     )
 
+    combined_note = plan.note
+    if scope_note:
+        combined_note = f"{scope_note} · {plan.note}" if plan.note else scope_note
+
     return InstanceQueryResponse(
-        query=f"{scope_note}\n{plan.query}",
+        query=plan.query,
         scope=scope,
         columns=plan.columns,
         rows=plan.rows,
         limit=limit,
-        note=plan.note,
+        note=combined_note,
     )
 
 

@@ -41,7 +41,6 @@ const ui = {
   instanceForm: document.getElementById('instanceForm'),
   instanceInput: document.getElementById('instanceInput'),
   instanceScope: document.getElementById('instanceScope'),
-  instanceQueryMode: document.querySelector('input[name="instanceQueryMode"]:checked'),
   instanceQuery: document.getElementById('instanceQuery'),
   instanceResults: document.getElementById('instanceResults'),
   instanceMeta: document.getElementById('instanceMeta'),
@@ -415,7 +414,6 @@ function getQueryMode() {
     throw new Error('Missing query mode selector');
   }
   const value = checked.value;
-  console.log("instanceQueryMode checked", value);
   if (value !== 'sql' && value !== 'pgql') {
     throw new Error(`Invalid query mode: ${value}`);
   }
@@ -858,7 +856,6 @@ function generateInstanceQuery() {
     execute: false,
     query_mode: queryMode,
   };
-  console.log('instance query payload', payload);
   apiPost('/api/instance-query', payload)
     .then(renderInstanceResults)
     .catch((err) => {
@@ -893,7 +890,6 @@ ui.instanceRun?.addEventListener('click', () => {
     sql,
     query_mode: queryMode,
   };
-  console.log('instance query payload', payload);
   apiPost('/api/instance-query', payload)
     .then(renderInstanceResults)
     .catch((err) => {
