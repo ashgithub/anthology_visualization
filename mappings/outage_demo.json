@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Default mapping tweaks for the outage_demo graph.",
+  "edge": {
+    "__default__": {
+      "case": "lower"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+"""Visualization FastAPI application package."""
+

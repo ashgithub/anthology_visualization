@@ -1,0 +1,9 @@
+{
+  "vertex": {
+    "DEFAULT": [
+      "SOURCE_UUID",
+      "RECORD_UUID",
+      "RECORD_LAST_CHANGE_TIMESTAMP"
+    ]
+  }
+}

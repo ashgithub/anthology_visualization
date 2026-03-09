@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Graph Visualization (MVP)</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar left" id="sidebarLeft">
+        <div class="sidebarHeader">
+          <h1>
+            <span id="activeGraphName">Graph</span>
+            <span class="muted">Types</span>
+          </h1>
+          <button id="collapseLeft" type="button" class="btn btnSmall" aria-label="Collapse left panel">⟨</button>
+        </div>
+
+        <div class="toolbar">
+          <button id="referenceBtn" type="button" class="btn">Reference</button>
+        </div>
+
+        <form id="searchForm" class="search">
+          <div class="searchWrap">
+            <input
+              id="searchInput"
+              type="text"
+              placeholder="Search types"
+              autocomplete="off"
+            />
+            <div id="autocomplete" class="autocomplete hidden"></div>
+          </div>
+          <button type="submit" class="btn">Search</button>
+          <button id="viewAllBtn" type="button" class="btn btnSecondary">View all</button>
+        </form>
+
+        <details class="section">
+          <summary class="sectionTitle">Recent</summary>
+          <ul id="recent" class="results"></ul>
+        </details>
+
+        <details class="section">
+          <summary class="sectionTitle">Details</summary>
+          <pre id="details" class="details">Select a node…</pre>
+        </details>
+
+        <details class="section">
+          <summary class="sectionTitle">Config</summary>
+          <div class="controls">
+            <label class="control">
+              <span>Layout</span>
+              <select id="layoutMode">
+                <option value="cose" selected>cose</option>
+                <option value="breadthfirst">breadthfirst</option>
+                <option value="concentric">concentric</option>
+                <option value="grid">grid</option>
+              </select>
+            </label>
+            <label class="controlInline">
+              <input id="autoLayout" type="checkbox" checked />
+              <span>Auto-layout on expand</span>
+            </label>
+            <label class="control">
+              <span>On node double-click</span>
+              <select id="navMode">
+                <option value="replace" selected>Expand (merge)</option>
+                <option value="none">Select only</option>
+              </select>
+            </label>
+            <button id="clearAllVisibility" type="button" class="btn">Clear all keep/hide</button>
+          </div>
+        </details>
+
+      </aside>
+
+      <div class="resizer" id="resizerLeft" role="presentation"></div>
+
+      <main class="main">
+        <div class="mainTabs">
+          <button id="tabSchema" class="mainTab active" type="button">Schema</button>
+          <button id="tabInstance" class="mainTab" type="button">Instance Query</button>
+        </div>
+        <div id="schemaPanel" class="mainPanel">
+          <div id="cy" class="cy"></div>
+        </div>
+        <div id="instancePanel" class="mainPanel hidden">
+          <div class="instanceWrap">
+            <div class="instanceHeader">
+              <div>
+                <div class="instanceTitle">Instance Query</div>
+                <div class="instanceSub">Describe what you want and preview the generated PGQL/SQL.</div>
+              </div>
+              <label class="controlInline">
+                <input id="instanceScope" type="checkbox" checked />
+                <span>Limit to selected types</span>
+              </label>
+            </div>
+
+            <form id="instanceForm" class="instanceForm">
+              <input
+                id="instanceInput"
+                type="text"
+                placeholder="e.g. Find all customers connected to MeterReading"
+                autocomplete="off"
+              />
+            </form>
+
+            <div class="instanceActions">
+              <button id="instanceGenerate" type="button" class="btn">Generate Query</button>
+            </div>
+
+            <div class="instanceMeta" id="instanceMeta">No query yet.</div>
+
+            <div class="instanceBlock">
+              <div class="blockTitle">Generated Query</div>
+              <textarea id="instanceQuery" class="details instanceQuery" rows="8">Waiting for input…</textarea>
+            </div>
+
+            <div class="instanceActions">
+              <button id="instanceEdit" type="button" class="btn">Edit Query</button>
+              <button id="instanceRun" type="button" class="btn">Run Query</button>
+            </div>
+
+            <div class="instanceBlock">
+              <div class="blockTitle">Results</div>
+              <div id="instanceResults" class="instanceResults">No results yet.</div>
+            </div>
+          </div>
+        </div>
+        <div id="status" class="status"></div>
+        <button id="expandLeft" class="panelToggle left hidden" type="button" aria-label="Expand left panel">
+          <span class="panelToggleIcon">⟩</span>
+          <span class="panelToggleLabel">Types</span>
+        </button>
+        <button id="expandRight" class="panelToggle right hidden" type="button" aria-label="Expand right panel">
+          <span class="panelToggleIcon">⟨</span>
+          <span class="panelToggleLabel">Relationships</span>
+        </button>
+      </main>
+
+      <div class="resizer" id="resizerRight" role="presentation"></div>
+
+      <aside class="sidebar right" id="sidebarRight">
+        <div class="sidebarHeader">
+          <h1>Relationships</h1>
+          <button id="collapseRight" type="button" class="btn btnSmall" aria-label="Collapse right panel">⟩</button>
+        </div>
+
+        <div class="section">
+          <div class="controls">
+            <div class="controlNote" id="relNote">Select a type node to see its relationships.</div>
+            <label class="controlInline">
+              <input id="hideDisconnected" type="checkbox" checked disabled />
+              <span>Hide disconnected subgraphs (session default)</span>
+            </label>
+            <div id="relActions" class="relActions">
+              <button id="keepSelected" type="button" class="btn">Keep selected</button>
+              <button id="hideSelected" type="button" class="btn">Hide selected</button>
+              <button id="clearRel" type="button" class="btn">Clear selection</button>
+              <button id="resetType" type="button" class="btn">Reset (this type)</button>
+            </div>
+          </div>
+
+          <div class="relLists">
+            <div class="relGroup">
+              <div class="relHeader">OUT</div>
+              <div id="relOut" class="relList"></div>
+            </div>
+            <div class="relGroup">
+              <div class="relHeader">IN</div>
+              <div id="relIn" class="relList"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div id="modalBackdrop" class="modalBackdrop hidden" role="presentation"></div>
+    <div id="referenceModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Reference">
+      <div class="modalHeader">
+        <div class="modalTitle">Reference</div>
+        <button id="modalClose" class="modalClose btn" type="button">Close</button>
+      </div>
+      <div class="modalBody">
+        <div class="tabs">
+          <button id="tabVertex" class="tab active" type="button">Vertex Types</button>
+          <button id="tabEdge" class="tab" type="button">Edge Types</button>
+        </div>
+
+        <div class="tabPanel">
+          <input id="refFilter" class="refFilter" type="text" placeholder="Filter…" autocomplete="off" />
+          <div id="refList" class="refList"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

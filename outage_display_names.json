@@ -1,0 +1,14 @@
+{
+  "edge": {
+    "ADDRESSES": "addresses",
+    "AFFECTED": "affected",
+    "CAUSED_BY": "caused_by",
+    "LOCATED_ON": "located_on",
+    "ORIGINATES_FROM": "originates_from",
+    "REFERENCES_ASSET": "references_asset",
+    "REFERENCES_OUTAGE": "references_outage",
+    "SERVED_BY": "served_by",
+    "SERVICES": "services"
+  },
+  "vertex": {}
+}

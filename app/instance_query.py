@@ -1,0 +1,317 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+import re
+
+import oracledb
+import oci
+from oci.generative_ai_inference import GenerativeAiInferenceClient
+from oci.generative_ai_inference.models import (
+    BaseChatRequest,
+    ChatDetails,
+    GenericChatRequest,
+    OnDemandServingMode,
+    SystemMessage,
+    TextContent,
+    UserMessage,
+)
+
+from .db_config import AppConfig, OracleConfig
+from pathlib import Path
+import json
+
+from .types_from_ddl import DdlGraphTypes, extract_property_graph_name
+
+
+@dataclass
+class QueryPlan:
+    query: str
+    columns: list[str]
+    rows: list[list[Any]]
+    note: str | None = None
+
+
+SCHEMA_PROMPT = """
+You are an expert Oracle SQL generator for Oracle property graphs.
+
+Generate a single SQL statement only. Do not include markdown or commentary.
+
+STRICT ORACLE GRAPH RULES:
+- Use Oracle SQL GRAPH_TABLE syntax.
+- The graph query MUST be inside GRAPH_TABLE and MUST include a MATCH clause.
+- MATCH is a clause inside GRAPH_TABLE. Never write "FROM MATCH ...".
+- Do NOT use PGQL_QUERY().
+- Always include a COLUMNS(...) clause.
+
+The query will be executed directly in Oracle. Avoid unsafe operations.
+""".strip()
+
+
+def _extract_graph_name(config: AppConfig) -> str | None:
+    """Best-effort extraction of the property graph name from the active DDL file."""
+
+    profile = config.graphs.get(config.active_graph)
+    if not profile:
+        return None
+    ddl_path = Path(profile.ddl_path)
+    project_root = Path(__file__).resolve().parents[1]
+    if not ddl_path.is_absolute():
+        ddl_path = (project_root / ddl_path).resolve()
+    if not ddl_path.exists():
+        return None
+    ddl_text = ddl_path.read_text(encoding="utf-8", errors="replace")
+    return extract_property_graph_name(ddl_text)
+
+
+def _build_schema_summary(graph: DdlGraphTypes, max_types: int = 80) -> str:
+    vertex_types, edge_types = graph.list_types()
+
+    vertex_lines = [f"- {t.name}" for t in vertex_types[:max_types]]
+    edge_lines = [f"- {e.name}" for e in edge_types[:max_types]]
+
+    summary_lines = [
+        f"Vertex types ({len(vertex_types)} total, showing {len(vertex_lines)}):",
+        *vertex_lines,
+        f"Edge types ({len(edge_types)} total, showing {len(edge_lines)}):",
+        *edge_lines,
+        "Note: Use the property graph defined by the active DDL profile.",
+    ]
+    return "\n".join(summary_lines)
+
+
+def _load_property_exclusions() -> dict[str, list[str]]:
+    path = (Path(__file__).resolve().parents[1] / "property_exclusions.json").resolve()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    vertex = data.get("vertex", {})
+    if not isinstance(vertex, dict):
+        return {}
+    default_exclusions = vertex.get("DEFAULT", [])
+    if not isinstance(default_exclusions, list):
+        default_exclusions = []
+    return {
+        "vertex_default": [str(p) for p in default_exclusions if p],
+    }
+
+
+def _filter_properties(props: list[str], exclusions: dict[str, list[str]], max_props: int) -> list[str]:
+    exclude = {p.upper() for p in exclusions.get("vertex_default", [])}
+    filtered = [p for p in props if p.upper() not in exclude]
+    return filtered[:max_props]
+
+
+def _build_rich_summary(graph: DdlGraphTypes, selected_types: list[str], max_props: int = 12) -> str:
+    exclusions = _load_property_exclusions()
+    type_ids = {f"v:{t}" if not t.startswith("v:") else t for t in selected_types}
+    nodes = [graph.get_type(tid) for tid in type_ids]
+    nodes = [n for n in nodes if n and n.kind == "VertexType"]
+    edges = graph.relations_for_types(type_ids)
+
+    if not nodes:
+        return "Selected scope has no vertex types to summarize."
+
+    lines = ["Selected types (rich summary):"]
+    for n in nodes:
+        props = _filter_properties(list(n.properties), exclusions, max_props)
+        props_text = ", ".join(props) if props else "(no properties listed)"
+        lines.append(f"- {n.name}: {props_text}")
+
+    if edges:
+        lines.append("Relationships:")
+        for e in edges[:80]:
+            src = e.source.removeprefix("v:")
+            dst = e.target.removeprefix("v:")
+            lines.append(f"- {e.type}: {src} -> {dst}")
+    return "\n".join(lines)
+
+
+def _build_chat_details(
+    config: AppConfig,
+    graph: DdlGraphTypes,
+    question: str,
+    scope: str,
+    selected_types: list[str],
+) -> ChatDetails:
+    oci_config = config.oci
+    if not oci_config:
+        raise ValueError("OCI config missing.")
+
+    graph_name = _extract_graph_name(config)
+
+    if scope == "selected" and selected_types:
+        schema_summary = _build_rich_summary(graph, selected_types)
+    else:
+        schema_summary = _build_schema_summary(graph)
+
+    graph_hint = f"Active property graph name: {graph_name}" if graph_name else "Active property graph name: (unknown)"
+    graph_table_examples = "\n".join(
+        [
+            "Examples (follow this exact style):",
+            "SELECT COUNT(*) AS vertex_count",
+            "FROM GRAPH_TABLE(",
+            f"  {graph_name or '<graph_name>'}",
+            "  MATCH (v)",
+            "  COLUMNS (1 AS dummy)",
+            ");",
+            "",
+            "SELECT COUNT(*) AS customer_count",
+            "FROM GRAPH_TABLE(",
+            f"  {graph_name or '<graph_name>'}",
+            "  MATCH (c IS customer)",
+            "  COLUMNS (1 AS dummy)",
+            ");",
+        ]
+    )
+    sys_msg = SystemMessage(
+        content=[
+            TextContent(
+                text=f"{SCHEMA_PROMPT}\n\n{graph_hint}\n\n{schema_summary}\n\n{graph_table_examples}"
+            )
+        ]
+    )
+    user_msg = UserMessage(content=[TextContent(text=question)])
+
+    chat_req = GenericChatRequest(
+        messages=[sys_msg, user_msg],
+        api_format=BaseChatRequest.API_FORMAT_GENERIC,
+        temperature=0.2,
+        is_stream=False,
+    )
+
+    return ChatDetails(
+        serving_mode=OnDemandServingMode(model_id=oci_config.model_id),
+        compartment_id=oci_config.compartment,
+        chat_request=chat_req,
+    )
+
+
+def _create_oci_client(config: AppConfig) -> GenerativeAiInferenceClient:
+    oci_config = config.oci
+    if not oci_config:
+        raise ValueError("OCI config missing.")
+    oci_profile = oci_config.profile or "DEFAULT"
+    oci_cfg = oci.config.from_file(oci_config.config_file, oci_profile)
+    return GenerativeAiInferenceClient(
+        config=oci_cfg,
+        service_endpoint=oci_config.endpoint,
+        retry_strategy=oci.retry.NoneRetryStrategy(),
+        timeout=(10, 240),
+    )
+
+
+def _connect_db(oracle: OracleConfig) -> oracledb.Connection:
+    return oracledb.connect(
+        user=oracle.user,
+        password=oracle.password,
+        dsn=oracle.dsn,
+        config_dir=oracle.wallet_dir,
+        wallet_location=oracle.wallet_dir,
+        wallet_password=oracle.wallet_password,
+    )
+
+
+def _execute_query(conn: oracledb.Connection, sql: str):
+    with conn.cursor() as cur:
+        cur.execute(sql)
+        return [d[0] for d in cur.description], cur.fetchmany(200)
+
+
+_BAD_SQL_HINTS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bPGQL_QUERY\b", re.IGNORECASE), "Do not use PGQL_QUERY(); use GRAPH_TABLE(<graph> MATCH ... COLUMNS ...)"),
+    (re.compile(r"\bFROM\s+MATCH\b", re.IGNORECASE), "MATCH must be a clause inside GRAPH_TABLE; do not write 'FROM MATCH ...'."),
+]
+
+
+def _validate_generated_sql(sql: str) -> str | None:
+    """Return an error message if the SQL looks invalid for our supported graph style."""
+
+    for pattern, msg in _BAD_SQL_HINTS:
+        if pattern.search(sql):
+            return msg
+    # If it looks like a graph query, require GRAPH_TABLE + MATCH + COLUMNS.
+    lowered = sql.lower()
+    mentions_graph = any(tok in lowered for tok in ["graph_table", "property graph", "match", "pgql"])
+    if mentions_graph:
+        if "graph_table" not in lowered:
+            return "Graph queries must use GRAPH_TABLE(...) syntax."
+        if " match " not in lowered and "\nmatch" not in lowered and "\tmatch" not in lowered:
+            return "Graph queries must include a MATCH clause inside GRAPH_TABLE."
+        if "columns" not in lowered:
+            return "Graph queries must include a COLUMNS(...) clause inside GRAPH_TABLE."
+    return None
+
+
+def _has_row_limit(sql: str) -> bool:
+    lowered = sql.lower()
+    return "fetch first" in lowered or "offset" in lowered or "rownum" in lowered
+
+
+def run_instance_query(
+    config: AppConfig,
+    oracle: OracleConfig,
+    graph: DdlGraphTypes,
+    text: str,
+    scope: str,
+    selected_types: list[str],
+    limit: int,
+    *,
+    execute: bool = False,
+    provided_sql: str | None = None,
+) -> QueryPlan:
+    if provided_sql:
+        generated_sql = provided_sql
+    else:
+        client = _create_oci_client(config)
+        details = _build_chat_details(config, graph, text, scope, selected_types)
+        response = client.chat(details)
+        generated_sql = (
+            response.data.chat_response.choices[0].message.content[0].text.strip()
+        )
+
+    extra_filters = ""
+    if scope == "selected" and selected_types:
+        joined = ", ".join(f"'{t}'" for t in selected_types[:25])
+        extra_filters = f"vertex_type IN ({joined})"
+
+    sql = generated_sql.strip()
+    # Strip code fences if the model returns them.
+    if sql.startswith("```"):
+        sql = re.sub(r"^```[a-zA-Z0-9_]*\n?", "", sql)
+        sql = re.sub(r"\n?```$", "", sql)
+        sql = sql.strip()
+
+    sql = sql.rstrip("; ")
+
+    validation_error = _validate_generated_sql(sql)
+    if validation_error:
+        return QueryPlan(
+            query=sql,
+            columns=[],
+            rows=[],
+            note=f"Rejected generated SQL: {validation_error}",
+        )
+    if extra_filters:
+        if " where " in sql.lower():
+            sql += f" AND {extra_filters}"
+        else:
+            sql += f" WHERE {extra_filters}"
+    if not _has_row_limit(sql):
+        sql += f" FETCH FIRST {limit} ROWS ONLY"
+
+    if not execute:
+        return QueryPlan(query=sql, columns=[], rows=[], note="Query generated only")
+
+    conn = _connect_db(oracle)
+    try:
+        cols, rows = _execute_query(conn, sql)
+    finally:
+        conn.close()
+
+    return QueryPlan(query=sql, columns=cols, rows=rows)
