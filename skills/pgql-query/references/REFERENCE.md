@@ -11,6 +11,8 @@ Generate Oracle property graph queries in Oracle's hybrid SQL/PGQL style.
 - Do not use `PGQL_QUERY()`.
 - Keep the query read-only.
 - Prefer concise but valid Oracle property graph queries.
+- Use only graph names, labels, edge names, and properties defined in the schema summary.
+- Do not invent schema terms.
 
 ## Schema
 See [the graph schema summary](../assets/schema_summary.md).
@@ -38,6 +40,8 @@ The backend expects this Oracle style instead:
 - `FROM GRAPH_TABLE(<graph_name> MATCH (...) COLUMNS (...))`
 
 ## Examples
+
+Prioritize outage-domain patterns that match the active schema. Avoid copying labels or properties from other domains unless clearly adapting only the query pattern.
 
 ### Count all vertices
 ```sql
@@ -98,5 +102,73 @@ FROM GRAPH_TABLE(
 )
 GROUP BY cause_category
 ORDER BY outage_count DESC, cause_category
+FETCH FIRST 50 ROWS ONLY
+```
+
+### List assets in poor condition
+```sql
+SELECT asset_id, asset_type, condition_score, status, criticality
+FROM GRAPH_TABLE(
+  outage_network
+  MATCH (a IS asset)
+  WHERE a.condition_score < 4
+  COLUMNS (
+    a.asset_id AS asset_id,
+    a.asset_type AS asset_type,
+    a.condition_score AS condition_score,
+    a.status AS status,
+    a.criticality AS criticality
+  )
+)
+ORDER BY condition_score, asset_id
+FETCH FIRST 50 ROWS ONLY
+```
+
+### Find outages caused by transformers
+```sql
+SELECT incident_code, asset_id, asset_type
+FROM GRAPH_TABLE(
+  outage_network
+  MATCH (o IS outage)-[CAUSED_BY]->(a IS asset)
+  WHERE a.asset_type = 'Transformer'
+  COLUMNS (
+    o.incident_code AS incident_code,
+    a.asset_id AS asset_id,
+    a.asset_type AS asset_type
+  )
+)
+FETCH FIRST 50 ROWS ONLY
+```
+
+### Find work orders addressing outages
+```sql
+SELECT incident_code, work_type, priority, status
+FROM GRAPH_TABLE(
+  outage_network
+  MATCH (w IS work_order)-[ADDRESSES]->(o IS outage)
+  COLUMNS (
+    o.incident_code AS incident_code,
+    w.work_type AS work_type,
+    w.priority AS priority,
+    w.status AS status
+  )
+)
+ORDER BY priority, incident_code
+FETCH FIRST 50 ROWS ONLY
+```
+
+### Find documents referencing outages
+```sql
+SELECT incident_code, document_type, title, source
+FROM GRAPH_TABLE(
+  outage_network
+  MATCH (d IS document)-[REFERENCES_OUTAGE]->(o IS outage)
+  COLUMNS (
+    o.incident_code AS incident_code,
+    d.document_type AS document_type,
+    d.title AS title,
+    d.source AS source
+  )
+)
 FETCH FIRST 50 ROWS ONLY
 ```
